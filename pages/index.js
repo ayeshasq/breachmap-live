@@ -346,14 +346,14 @@ export default function Home() {
       while (target.code === source.code) target = countries[Math.floor(Math.random()*countries.length)];
       return { id: Date.now()+Math.random(), timestamp: new Date(), source, target, attackType: attackTypes[Math.floor(Math.random()*attackTypes.length)], severity: severities[Math.floor(Math.random()*severities.length)], protocol: ['HTTP','TCP','UDP','ICMP'][Math.floor(Math.random()*4)], port: Math.floor(Math.random()*65535), sector: ['Financial','Healthcare','Government','Education','Retail'][Math.floor(Math.random()*5)], affected: Math.floor(Math.random()*10000)+100 };
     };
-    setTimeout(() => { const a=generate(); setAttacks([a]); addAttackToMap(a); }, 400);
-    setTimeout(() => { const a=generate(); setAttacks(p=>[a,...p]); addAttackToMap(a); }, 1200);
+    setTimeout(() => { const a=generate(); setAttacks([a]); addAttackToMap(a); }, 100);
+    setTimeout(() => { const a=generate(); setAttacks(p=>[a,...p]); addAttackToMap(a); }, 400);
     const interval = setInterval(() => {
       const a = generate();
       setAttacks(p => [a,...p].slice(0,25));
       setStats(p => ({ attacksToday: p.attacksToday+1, attacksActive: Math.floor(Math.random()*150)+50 }));
       addAttackToMap(a);
-    }, 2200);
+    }, 800);
     return () => clearInterval(interval);
   }, [mapLoaded]);
 
