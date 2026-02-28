@@ -1,19 +1,22 @@
 import { useEffect, useState, useRef } from 'react';
 import Head from 'next/head';
+import Script from 'next/script';
 
 export default function Home() {
   const [attacks, setAttacks] = useState([]);
   const [selectedAttack, setSelectedAttack] = useState(null);
   const [stats, setStats] = useState({
-    attacksToday: 0,
+    attacksToday: 45234,
     attacksActive: 0,
     mostTargeted: 'US'
   });
   const [learningMode, setLearningMode] = useState('beginner');
+  const [mapLoaded, setMapLoaded] = useState(false);
   const mapRef = useRef(null);
-  const markersRef = useRef([]);
+  const mapInstanceRef = useRef(null);
+  const attackLayersRef = useRef([]);
 
-  // Attack types and data
+  // Attack data
   const attackTypes = ['DDoS', 'Malware', 'Phishing', 'Ransomware', 'Data Breach', 'SQL Injection'];
   const severities = ['critical', 'high', 'medium', 'low'];
   const countries = [
@@ -24,7 +27,14 @@ export default function Home() {
     { name: 'Germany', code: 'DE', flag: '🇩🇪', coords: [10.4515, 51.1657] },
     { name: 'India', code: 'IN', flag: '🇮🇳', coords: [78.9629, 20.5937] },
     { name: 'Brazil', code: 'BR', flag: '🇧🇷', coords: [-51.9253, -14.2350] },
-    { name: 'Japan', code: 'JP', flag: '🇯🇵', coords: [138.2529, 36.2048] }
+    { name: 'Japan', code: 'JP', flag: '🇯🇵', coords: [138.2529, 36.2048] },
+    { name: 'France', code: 'FR', flag: '🇫🇷', coords: [2.2137, 46.2276] },
+    { name: 'Australia', code: 'AU', flag: '🇦🇺', coords: [133.7751, -25.2744] },
+    { name: 'Canada', code: 'CA', flag: '🇨🇦', coords: [-106.3468, 56.1304] },
+    { name: 'South Korea', code: 'KR', flag: '🇰🇷', coords: [127.7669, 35.9078] },
+    { name: 'Netherlands', code: 'NL', flag: '🇳🇱', coords: [5.2913, 52.1326] },
+    { name: 'Singapore', code: 'SG', flag: '🇸🇬', coords: [103.8198, 1.3521] },
+    { name: 'South Africa', code: 'ZA', flag: '🇿🇦', coords: [22.9375, -30.5595] }
   ];
 
   const explanations = {
@@ -54,7 +64,16 @@ export default function Home() {
     }
   };
 
-  // Generate random attack
+  const getSeverityColor = (severity) => {
+    const colors = {
+      critical: '#dc2626',
+      high: '#f97316',
+      medium: '#f59e0b',
+      low: '#10b981'
+    };
+    return colors[severity] || '#6b7280';
+  };
+
   const generateAttack = () => {
     const source = countries[Math.floor(Math.random() * countries.length)];
     let target = countries[Math.floor(Math.random() * countries.length)];
@@ -71,12 +90,180 @@ export default function Home() {
       severity: severities[Math.floor(Math.random() * severities.length)],
       protocol: 'HTTP',
       port: Math.floor(Math.random() * 65535),
-      sector: ['Financial', 'Healthcare', 'Government', 'Education'][Math.floor(Math.random() * 4)],
+      sector: ['Financial', 'Healthcare', 'Government', 'Education', 'Retail'][Math.floor(Math.random() * 5)],
       affected: Math.floor(Math.random() * 10000) + 100
     };
   };
 
-  // Simulate attacks
+  const createArcCoordinates = (start, end, steps = 50) => {
+    const coordinates = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const lng = start[0] + (end[0] - start[0]) * t;
+      const lat = start[1] + (end[1] - start[1]) * t;
+      coordinates.push([lng, lat]);
+    }
+    return coordinates;
+  };
+
+  const addAttackToMap = (attack) => {
+    if (!mapInstanceRef.current) return;
+
+    const map = mapInstanceRef.current;
+    const lineId = `attack-line-${attack.id}`;
+    const pointId = `attack-point-${attack.id}`;
+    
+    // Create arc coordinates
+    const arcCoordinates = createArcCoordinates(attack.source.coords, attack.target.coords);
+
+    // Add attack line source
+    map.addSource(lineId, {
+      type: 'geojson',
+      data: {
+        type: 'Feature',
+        properties: {},
+        geometry: {
+          type: 'LineString',
+          coordinates: arcCoordinates
+        }
+      }
+    });
+
+    // Add attack line layer
+    map.addLayer({
+      id: lineId,
+      type: 'line',
+      source: lineId,
+      paint: {
+        'line-color': getSeverityColor(attack.severity),
+        'line-width': 2,
+        'line-opacity': 0.8
+      }
+    });
+
+    // Add pulsing point at target
+    map.addSource(pointId, {
+      type: 'geojson',
+      data: {
+        type: 'Feature',
+        properties: {
+          attack: JSON.stringify(attack)
+        },
+        geometry: {
+          type: 'Point',
+          coordinates: attack.target.coords
+        }
+      }
+    });
+
+    map.addLayer({
+      id: pointId,
+      type: 'circle',
+      source: pointId,
+      paint: {
+        'circle-radius': 8,
+        'circle-color': getSeverityColor(attack.severity),
+        'circle-opacity': 0.8,
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-opacity': 0.5
+      }
+    });
+
+    // Add click handler for the point
+    map.on('click', pointId, (e) => {
+      const attackData = JSON.parse(e.features[0].properties.attack);
+      setSelectedAttack(attackData);
+    });
+
+    // Change cursor on hover
+    map.on('mouseenter', pointId, () => {
+      map.getCanvas().style.cursor = 'pointer';
+    });
+
+    map.on('mouseleave', pointId, () => {
+      map.getCanvas().style.cursor = '';
+    });
+
+    attackLayersRef.current.push({ lineId, pointId });
+
+    // Remove after 10 seconds
+    setTimeout(() => {
+      if (map.getLayer(lineId)) map.removeLayer(lineId);
+      if (map.getSource(lineId)) map.removeSource(lineId);
+      if (map.getLayer(pointId)) map.removeLayer(pointId);
+      if (map.getSource(pointId)) map.removeSource(pointId);
+      attackLayersRef.current = attackLayersRef.current.filter(
+        layer => layer.lineId !== lineId
+      );
+    }, 10000);
+  };
+
+  // Initialize Mapbox
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.mapboxgl) return;
+
+    window.mapboxgl.accessToken = 'pk.eyJ1IjoiYnJlYWNobWFwIiwiYSI6ImNtNXRlc3RkZW1hcHkyanB6ZmJ0ZXN0In0.test';
+
+    const map = new window.mapboxgl.Map({
+      container: mapRef.current,
+      style: 'mapbox://styles/mapbox/dark-v11',
+      projection: 'globe',
+      zoom: 1.5,
+      center: [0, 20],
+      pitch: 0
+    });
+
+    map.on('load', () => {
+      // Add atmosphere
+      map.setFog({
+        color: 'rgb(10, 14, 26)',
+        'high-color': 'rgb(0, 217, 255)',
+        'horizon-blend': 0.02,
+        'space-color': 'rgb(10, 14, 26)',
+        'star-intensity': 0.15
+      });
+
+      // Auto-rotate globe
+      let userInteracting = false;
+      let spinEnabled = true;
+
+      const spinGlobe = () => {
+        if (spinEnabled && !userInteracting) {
+          const center = map.getCenter();
+          center.lng -= 0.3;
+          map.easeTo({ center, duration: 1000, easing: t => t });
+        }
+      };
+
+      map.on('mousedown', () => { userInteracting = true; });
+      map.on('mouseup', () => { userInteracting = false; spinGlobe(); });
+      map.on('dragend', () => { userInteracting = false; spinGlobe(); });
+      map.on('pitchend', () => { userInteracting = false; spinGlobe(); });
+      map.on('rotateend', () => { userInteracting = false; spinGlobe(); });
+      map.on('moveend', () => {
+        if (!userInteracting) spinGlobe();
+      });
+
+      const spinInterval = setInterval(spinGlobe, 1000);
+
+      mapInstanceRef.current = map;
+      setMapLoaded(true);
+
+      return () => {
+        clearInterval(spinInterval);
+        spinEnabled = false;
+      };
+    });
+
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+      }
+    };
+  }, []);
+
+  // Generate attacks
   useEffect(() => {
     const interval = setInterval(() => {
       const newAttack = generateAttack();
@@ -86,35 +273,27 @@ export default function Home() {
         attacksToday: prev.attacksToday + 1,
         attacksActive: Math.floor(Math.random() * 150) + 50
       }));
+
+      if (mapLoaded && mapInstanceRef.current) {
+        addAttackToMap(newAttack);
+      }
     }, 2000);
 
-    // Initial stats
-    setStats({
-      attacksToday: 45234,
-      attacksActive: 127,
-      mostTargeted: 'US'
-    });
-
     return () => clearInterval(interval);
-  }, []);
-
-  const getSeverityColor = (severity) => {
-    const colors = {
-      critical: '#dc2626',
-      high: '#f97316',
-      medium: '#f59e0b',
-      low: '#10b981'
-    };
-    return colors[severity] || '#6b7280';
-  };
+  }, [mapLoaded]);
 
   return (
     <>
       <Head>
         <title>BreachMap Live - Real-Time Cyber Threat Intelligence</title>
-        <meta name="description" content="Real-time cyber threat visualization" />
-        <link rel="icon" href="/favicon.ico" />
+        <meta name="description" content="Real-time cyber threat visualization with 3D globe" />
+        <link href='https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css' rel='stylesheet' />
       </Head>
+
+      <Script 
+        src="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js"
+        strategy="beforeInteractive"
+      />
 
       <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', background: '#0a0e1a' }}>
         {/* Header */}
@@ -178,52 +357,18 @@ export default function Home() {
           </div>
         </header>
 
-        {/* Main Content Area */}
-        <div style={{
-          position: 'fixed',
-          top: '80px',
-          left: 0,
-          right: 0,
-          bottom: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: 'radial-gradient(circle at 50% 50%, rgba(0, 217, 255, 0.05) 0%, rgba(10, 14, 26, 1) 100%)'
-        }}>
-          <div style={{ textAlign: 'center', maxWidth: '600px', padding: '40px' }}>
-            <div style={{
-              fontSize: '120px',
-              marginBottom: '20px',
-              animation: 'float 3s ease-in-out infinite'
-            }}>
-              🌍
-            </div>
-            <h2 style={{
-              fontSize: '36px',
-              fontFamily: 'Orbitron',
-              marginBottom: '20px',
-              background: 'linear-gradient(135deg, #00d9ff, #a55eea)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent'
-            }}>
-              Interactive Cyber Threat Map
-            </h2>
-            <p style={{ fontSize: '18px', color: '#9ca3af', marginBottom: '30px', lineHeight: 1.6 }}>
-              This is a simplified demo version. The full version includes:
-            </p>
-            <ul style={{ textAlign: 'left', color: '#00d9ff', fontSize: '16px', lineHeight: 2 }}>
-              <li>✅ 3D rotating globe with Mapbox</li>
-              <li>✅ Animated attack trajectories</li>
-              <li>✅ AI-powered explanations (beginner/intermediate/expert)</li>
-              <li>✅ Real-time WebSocket updates</li>
-              <li>✅ Interactive knowledge base</li>
-              <li>✅ Attack filtering and statistics</li>
-            </ul>
-            <p style={{ fontSize: '14px', color: '#6b7280', marginTop: '30px' }}>
-              To deploy the full version, you'll need: Mapbox API token, OpenAI API key, and a backend server (Railway/Render)
-            </p>
-          </div>
-        </div>
+        {/* Map Container */}
+        <div 
+          ref={mapRef} 
+          style={{
+            position: 'fixed',
+            top: '80px',
+            left: 0,
+            right: selectedAttack ? '450px' : 0,
+            bottom: 0,
+            transition: 'right 0.4s ease'
+          }}
+        />
 
         {/* Attack Feed */}
         <div style={{
@@ -490,10 +635,6 @@ export default function Home() {
           @keyframes slideInRight {
             from { transform: translateX(100%); }
             to { transform: translateX(0); }
-          }
-          @keyframes float {
-            0%, 100% { transform: translateY(0px); }
-            50% { transform: translateY(-20px); }
           }
         `}</style>
       </div>
