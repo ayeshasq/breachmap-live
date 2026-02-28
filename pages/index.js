@@ -95,7 +95,7 @@ export default function Home() {
     };
   };
 
-  const createArcCoordinates = (start, end, steps = 10) => {
+  const createArcCoordinates = (start, end, steps = 5) => {
     const coordinates = [];
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
@@ -110,7 +110,7 @@ export default function Home() {
     if (!mapInstanceRef.current) return;
 
     // CRITICAL FIX: Only allow 5 attacks on screen at once
-    if (attackLayersRef.current.length >= 5) {
+    if (attackLayersRef.current.length >= 3) {
     const oldest = attackLayersRef.current.shift();
     const map = mapInstanceRef.current;
     if (map.getLayer(oldest.lineId)) map.removeLayer(oldest.lineId);
