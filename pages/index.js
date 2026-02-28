@@ -203,7 +203,7 @@ export default function Home() {
   useEffect(() => {
     if (typeof window === 'undefined' || !window.mapboxgl) return;
 
-    window.mapboxgl.accessToken = 'pk.eyJ1IjoiYnJlYWNobWFwIiwiYSI6ImNtNXRlc3RkZW1hcHkyanB6ZmJ0ZXN0In0.test';
+    window.mapboxgl.accessToken = 'pk.eyJ1IjoiYXllc2hhc3EiLCJhIjoiY21qNDBvOGF0MDB3ODNmcTJwbXFuaTY3eSJ9.EKiY5BPeiDF3s-tYkHGUfg';
 
     const map = new window.mapboxgl.Map({
       container: mapRef.current,
