@@ -249,7 +249,7 @@ export default function Home() {
   const addAttackToMap = (attack) => {
     const map = mapInstanceRef.current;
     if (!map) return;
-    while (attackLayersRef.current.length >= 8) {
+    while (attackLayersRef.current.length >= 15) {
       const old = attackLayersRef.current.shift();
       ['glowId','lineId','dotId','pulseId'].forEach(k => {
         if (old[k]) { if (map.getLayer(old[k])) map.removeLayer(old[k]); if (map.getSource(old[k])) map.removeSource(old[k]); }
@@ -276,7 +276,7 @@ export default function Home() {
     });
     attackLayersRef.current.push({ lineId, glowId, dotId, pulseId });
 
-    const totalSteps = fullArc.length, drawDuration = 1800, startTime = performance.now();
+    const totalSteps = fullArc.length, drawDuration = 900, startTime = performance.now();
     const animatePulse = (startT, ringIndex) => {
       const ringDuration = 1200, delay = ringIndex * 400;
       const doRing = (now) => {
@@ -317,7 +317,7 @@ export default function Home() {
         }
       };
       requestAnimationFrame(fadeOut);
-    }, 6000);
+    }, 8000);
   };
 
   useEffect(() => {
