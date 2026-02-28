@@ -255,7 +255,7 @@ export default function Home() {
         if (!userInteracting) spinGlobe();
       });
 
-      const spinInterval = setInterval(spinGlobe, 5000);
+      const spinInterval = setInterval(spinGlobe, 8000);
 
       mapInstanceRef.current = map;
       setMapLoaded(true);
