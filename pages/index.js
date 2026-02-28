@@ -95,7 +95,7 @@ export default function Home() {
     };
   };
 
-  const createArcCoordinates = (start, end, steps = 50) => {
+  const createArcCoordinates = (start, end, steps = 10) => {
     const coordinates = [];
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
@@ -108,6 +108,16 @@ export default function Home() {
 
   const addAttackToMap = (attack) => {
     if (!mapInstanceRef.current) return;
+
+    // CRITICAL FIX: Only allow 5 attacks on screen at once
+    if (attackLayersRef.current.length >= 5) {
+    const oldest = attackLayersRef.current.shift();
+    const map = mapInstanceRef.current;
+    if (map.getLayer(oldest.lineId)) map.removeLayer(oldest.lineId);
+    if (map.getSource(oldest.lineId)) map.removeSource(oldest.lineId);
+    if (map.getLayer(oldest.pointId)) map.removeLayer(oldest.pointId);
+    if (map.getSource(oldest.pointId)) map.removeSource(oldest.pointId);
+  }
 
     const map = mapInstanceRef.current;
     const lineId = `attack-line-${attack.id}`;
@@ -196,7 +206,7 @@ export default function Home() {
       attackLayersRef.current = attackLayersRef.current.filter(
         layer => layer.lineId !== lineId
       );
-    }, 10000);
+    }, 4000);
   };
 
   // Initialize Mapbox
