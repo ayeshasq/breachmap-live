@@ -206,7 +206,7 @@ export default function Home() {
       attackLayersRef.current = attackLayersRef.current.filter(
         layer => layer.lineId !== lineId
       );
-    }, 4000);
+    }, 3000);
   };
 
   // Initialize Mapbox
