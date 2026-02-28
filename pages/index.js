@@ -5,18 +5,16 @@ import Script from 'next/script';
 export default function Home() {
   const [attacks, setAttacks] = useState([]);
   const [selectedAttack, setSelectedAttack] = useState(null);
-  const [stats, setStats] = useState({
-    attacksToday: 45234,
-    attacksActive: 0,
-    mostTargeted: 'US'
-  });
+  const [stats, setStats] = useState({ attacksToday: 45234, attacksActive: 0 });
   const [learningMode, setLearningMode] = useState('beginner');
   const [mapLoaded, setMapLoaded] = useState(false);
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const attackLayersRef = useRef([]);
+  const spinRef = useRef(null);
+  const userInteractingRef = useRef(false);
+  const lastTimeRef = useRef(null);
 
-  // Attack data
   const attackTypes = ['DDoS', 'Malware', 'Phishing', 'Ransomware', 'Data Breach', 'SQL Injection'];
   const severities = ['critical', 'high', 'medium', 'low'];
   const countries = [
@@ -64,149 +62,164 @@ export default function Home() {
     }
   };
 
-  const getSeverityColor = (severity) => {
-    const colors = {
-      critical: '#dc2626',
-      high: '#f97316',
-      medium: '#f59e0b',
-      low: '#10b981'
-    };
-    return colors[severity] || '#6b7280';
-  };
+  const getSeverityColor = (severity) => ({
+    critical: '#ff2d55',
+    high: '#ff6b35',
+    medium: '#ffd60a',
+    low: '#30d158'
+  }[severity] || '#00d9ff');
 
-  const generateAttack = () => {
-    const source = countries[Math.floor(Math.random() * countries.length)];
-    let target = countries[Math.floor(Math.random() * countries.length)];
-    while (target.code === source.code) {
-      target = countries[Math.floor(Math.random() * countries.length)];
-    }
+  const getSeverityGlow = (severity) => ({
+    critical: 'rgba(255, 45, 85, 0.8)',
+    high: 'rgba(255, 107, 53, 0.8)',
+    medium: 'rgba(255, 214, 10, 0.8)',
+    low: 'rgba(48, 209, 88, 0.8)'
+  }[severity] || 'rgba(0, 217, 255, 0.8)');
 
-    return {
-      id: Date.now() + Math.random(),
-      timestamp: new Date(),
-      source,
-      target,
-      attackType: attackTypes[Math.floor(Math.random() * attackTypes.length)],
-      severity: severities[Math.floor(Math.random() * severities.length)],
-      protocol: 'HTTP',
-      port: Math.floor(Math.random() * 65535),
-      sector: ['Financial', 'Healthcare', 'Government', 'Education', 'Retail'][Math.floor(Math.random() * 5)],
-      affected: Math.floor(Math.random() * 10000) + 100
-    };
-  };
+  // Bezier curve with raised midpoint for globe arc feel
+  const createBezierArc = (start, end, steps = 80) => {
+    const coords = [];
+    // Midpoint elevated — simulates a great-circle arc visually
+    const midLng = (start[0] + end[0]) / 2;
+    const midLat = (start[1] + end[1]) / 2 + Math.abs(end[0] - start[0]) * 0.25;
 
-  const createArcCoordinates = (start, end, steps = 5) => {
-    const coordinates = [];
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
-      const lng = start[0] + (end[0] - start[0]) * t;
-      const lat = start[1] + (end[1] - start[1]) * t;
-      coordinates.push([lng, lat]);
+      const mt = 1 - t;
+      // Quadratic bezier
+      const lng = mt * mt * start[0] + 2 * mt * t * midLng + t * t * end[0];
+      const lat = mt * mt * start[1] + 2 * mt * t * midLat + t * t * end[1];
+      coords.push([lng, lat]);
     }
-    return coordinates;
+    return coords;
   };
 
   const addAttackToMap = (attack) => {
-    if (!mapInstanceRef.current) return;
-
-    // CRITICAL FIX: Only allow 5 attacks on screen at once
-    if (attackLayersRef.current.length >= 3) {
-    const oldest = attackLayersRef.current.shift();
     const map = mapInstanceRef.current;
-    if (map.getLayer(oldest.lineId)) map.removeLayer(oldest.lineId);
-    if (map.getSource(oldest.lineId)) map.removeSource(oldest.lineId);
-    if (map.getLayer(oldest.pointId)) map.removeLayer(oldest.pointId);
-    if (map.getSource(oldest.pointId)) map.removeSource(oldest.pointId);
-  }
+    if (!map) return;
 
-    const map = mapInstanceRef.current;
-    const lineId = `attack-line-${attack.id}`;
-    const pointId = `attack-point-${attack.id}`;
-    
-    // Create arc coordinates
-    const arcCoordinates = createArcCoordinates(attack.source.coords, attack.target.coords);
-
-    // Add attack line source
-    map.addSource(lineId, {
-      type: 'geojson',
-      data: {
-        type: 'Feature',
-        properties: {},
-        geometry: {
-          type: 'LineString',
-          coordinates: arcCoordinates
+    // Clean old layers beyond limit
+    while (attackLayersRef.current.length >= 8) {
+      const old = attackLayersRef.current.shift();
+      ['glowId', 'lineId', 'dotId', 'pulseId'].forEach(key => {
+        if (old[key]) {
+          if (map.getLayer(old[key])) map.removeLayer(old[key]);
+          if (map.getSource(old[key])) map.removeSource(old[key]);
         }
-      }
+      });
+    }
+
+    const uid = `${attack.id}-${Date.now()}`;
+    const lineId = `line-${uid}`;
+    const glowId = `glow-${uid}`;
+    const dotId = `dot-${uid}`;
+    const pulseId = `pulse-${uid}`;
+    const color = getSeverityColor(attack.severity);
+    const fullArc = createBezierArc(attack.source.coords, attack.target.coords);
+
+    // --- Add glow (wide blurry line) ---
+    map.addSource(glowId, { type: 'geojson', data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [attack.source.coords] } } });
+    map.addLayer({ id: glowId, type: 'line', source: glowId, paint: { 'line-color': color, 'line-width': 8, 'line-opacity': 0.25, 'line-blur': 6 } });
+
+    // --- Add sharp line ---
+    map.addSource(lineId, { type: 'geojson', data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [attack.source.coords] } } });
+    map.addLayer({ id: lineId, type: 'line', source: lineId, paint: { 'line-color': color, 'line-width': 1.5, 'line-opacity': 0.95 } });
+
+    // --- Pulse rings at target ---
+    map.addSource(pulseId, { type: 'geojson', data: { type: 'Feature', geometry: { type: 'Point', coordinates: attack.target.coords } } });
+    map.addLayer({ id: pulseId, type: 'circle', source: pulseId, paint: { 'circle-radius': 0, 'circle-color': 'transparent', 'circle-stroke-color': color, 'circle-stroke-width': 2, 'circle-stroke-opacity': 0, 'circle-pitch-alignment': 'map' } });
+
+    // --- Dot at moving tip ---
+    map.addSource(dotId, { type: 'geojson', data: { type: 'Feature', geometry: { type: 'Point', coordinates: attack.source.coords } } });
+    map.addLayer({ id: dotId, type: 'circle', source: dotId, paint: { 'circle-radius': 4, 'circle-color': color, 'circle-opacity': 1, 'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff', 'circle-stroke-opacity': 0.8, 'circle-pitch-alignment': 'map' } });
+
+    map.on('click', pulseId, () => setSelectedAttack(attack));
+    map.on('click', dotId, () => setSelectedAttack(attack));
+    ['mouseenter', 'mouseleave'].forEach(evt => {
+      map.on(evt, dotId, () => { map.getCanvas().style.cursor = evt === 'mouseenter' ? 'pointer' : ''; });
+      map.on(evt, pulseId, () => { map.getCanvas().style.cursor = evt === 'mouseenter' ? 'pointer' : ''; });
     });
 
-    // Add attack line layer
-    map.addLayer({
-      id: lineId,
-      type: 'line',
-      source: lineId,
-      paint: {
-        'line-color': getSeverityColor(attack.severity),
-        'line-width': 2,
-        'line-opacity': 0.8
-      }
-    });
+    attackLayersRef.current.push({ lineId, glowId, dotId, pulseId });
 
-    // Add pulsing point at target
-    map.addSource(pointId, {
-      type: 'geojson',
-      data: {
-        type: 'Feature',
-        properties: {
-          attack: JSON.stringify(attack)
-        },
-        geometry: {
-          type: 'Point',
-          coordinates: attack.target.coords
+    // === ANIMATE ARC DRAWING ===
+    const totalSteps = fullArc.length;
+    const drawDuration = 1800; // ms to draw the arc
+    const startTime = performance.now();
+    let drawn = false;
+
+    const animateDraw = (now) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / drawDuration, 1);
+      // Ease-out cubic
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const visibleCount = Math.max(2, Math.floor(eased * totalSteps));
+      const visibleCoords = fullArc.slice(0, visibleCount);
+
+      const arcData = { type: 'Feature', geometry: { type: 'LineString', coordinates: visibleCoords } };
+      if (map.getSource(lineId)) map.getSource(lineId).setData(arcData);
+      if (map.getSource(glowId)) map.getSource(glowId).setData(arcData);
+
+      // Move tip dot
+      const tipCoord = visibleCoords[visibleCoords.length - 1];
+      if (map.getSource(dotId)) map.getSource(dotId).setData({ type: 'Feature', geometry: { type: 'Point', coordinates: tipCoord } });
+
+      if (progress < 1) {
+        requestAnimationFrame(animateDraw);
+      } else {
+        drawn = true;
+        // Snap dot to target
+        if (map.getSource(dotId)) map.getSource(dotId).setData({ type: 'Feature', geometry: { type: 'Point', coordinates: attack.target.coords } });
+        // Animate pulse rings
+        animatePulse(performance.now(), 0);
+      }
+    };
+
+    // === PULSE RING ANIMATION at target ===
+    const animatePulse = (startT, ringIndex) => {
+      const ringsTotal = 3;
+      const ringDuration = 1200;
+      const delay = ringIndex * 400;
+
+      const doRing = (now) => {
+        const t = Math.min((now - startT - delay) / ringDuration, 1);
+        if (t < 0) { requestAnimationFrame(doRing); return; }
+        const radius = t * 28;
+        const opacity = (1 - t) * 0.7;
+        if (map.getLayer(pulseId)) {
+          map.setPaintProperty(pulseId, 'circle-stroke-opacity', opacity);
+          map.setPaintProperty(pulseId, 'circle-radius', radius);
         }
-      }
-    });
+        if (t < 1) requestAnimationFrame(doRing);
+        else if (ringIndex < ringsTotal - 1) animatePulse(startT, ringIndex + 1);
+      };
+      requestAnimationFrame(doRing);
+    };
 
-    map.addLayer({
-      id: pointId,
-      type: 'circle',
-      source: pointId,
-      paint: {
-        'circle-radius': 8,
-        'circle-color': getSeverityColor(attack.severity),
-        'circle-opacity': 0.8,
-        'circle-stroke-width': 2,
-        'circle-stroke-color': '#ffffff',
-        'circle-stroke-opacity': 0.5
-      }
-    });
+    requestAnimationFrame(animateDraw);
 
-    // Add click handler for the point
-    map.on('click', pointId, (e) => {
-      const attackData = JSON.parse(e.features[0].properties.attack);
-      setSelectedAttack(attackData);
-    });
-
-    // Change cursor on hover
-    map.on('mouseenter', pointId, () => {
-      map.getCanvas().style.cursor = 'pointer';
-    });
-
-    map.on('mouseleave', pointId, () => {
-      map.getCanvas().style.cursor = '';
-    });
-
-    attackLayersRef.current.push({ lineId, pointId });
-
-    // Remove after 10 seconds
+    // === FADE OUT EVERYTHING after 6s ===
     setTimeout(() => {
-      if (map.getLayer(lineId)) map.removeLayer(lineId);
-      if (map.getSource(lineId)) map.removeSource(lineId);
-      if (map.getLayer(pointId)) map.removeLayer(pointId);
-      if (map.getSource(pointId)) map.removeSource(pointId);
-      attackLayersRef.current = attackLayersRef.current.filter(
-        layer => layer.lineId !== lineId
-      );
-    }, 3000);
+      const fadeStart = performance.now();
+      const fadeDuration = 800;
+      const fadeOut = (now) => {
+        const t = Math.min((now - fadeStart) / fadeDuration, 1);
+        const op = 1 - t;
+        if (map.getLayer(lineId)) map.setPaintProperty(lineId, 'line-opacity', op * 0.95);
+        if (map.getLayer(glowId)) map.setPaintProperty(glowId, 'line-opacity', op * 0.25);
+        if (map.getLayer(dotId)) map.setPaintProperty(dotId, 'circle-opacity', op);
+        if (t < 1) requestAnimationFrame(fadeOut);
+        else {
+          ['glowId', 'lineId', 'dotId', 'pulseId'].forEach(key => {
+            const id = { glowId, lineId, dotId, pulseId }[key];
+            if (map.getLayer(id)) map.removeLayer(id);
+            if (map.getSource(id)) map.removeSource(id);
+          });
+          attackLayersRef.current = attackLayersRef.current.filter(l => l.lineId !== lineId);
+        }
+      };
+      requestAnimationFrame(fadeOut);
+    }, 6000);
   };
 
   // Initialize Mapbox
@@ -219,75 +232,81 @@ export default function Home() {
       container: mapRef.current,
       style: 'mapbox://styles/mapbox/dark-v11',
       projection: 'globe',
-      zoom: 1.5,
-      center: [0, 20],
-      pitch: 0
+      zoom: 1.8,
+      center: [15, 25],
+      pitch: 0,
+      antialias: true
     });
 
     map.on('load', () => {
-      // Add atmosphere
+      // Deep space atmosphere — matches Kaspersky's dark purple-blue globe
       map.setFog({
-        color: 'rgb(10, 14, 26)',
-        'high-color': 'rgb(0, 217, 255)',
-        'horizon-blend': 0.02,
-        'space-color': 'rgb(10, 14, 26)',
-        'star-intensity': 0.15
+        color: 'rgb(6, 8, 20)',
+        'high-color': 'rgb(20, 40, 100)',
+        'horizon-blend': 0.04,
+        'space-color': 'rgb(4, 4, 16)',
+        'star-intensity': 0.6
       });
 
-      // Auto-rotate globe
-      let userInteracting = false;
-      let spinEnabled = true;
+      // Smooth continuous globe rotation using rAF
+      const SPIN_SPEED = 0.012; // degrees per frame @ 60fps ≈ 0.72°/s (slow & cinematic)
 
-      const spinGlobe = () => {
-        if (spinEnabled && !userInteracting) {
+      const spinLoop = (timestamp) => {
+        if (!userInteractingRef.current) {
           const center = map.getCenter();
-          center.lng -= 0.3;
-          map.easeTo({ center, duration: 1000, easing: t => t });
+          map.setCenter([center.lng - SPIN_SPEED, center.lat]);
         }
+        spinRef.current = requestAnimationFrame(spinLoop);
       };
 
-      map.on('mousedown', () => { userInteracting = true; });
-      map.on('mouseup', () => { userInteracting = false; spinGlobe(); });
-      map.on('dragend', () => { userInteracting = false; spinGlobe(); });
-      map.on('pitchend', () => { userInteracting = false; spinGlobe(); });
-      map.on('rotateend', () => { userInteracting = false; spinGlobe(); });
-      map.on('moveend', () => {
-        if (!userInteracting) spinGlobe();
-      });
+      spinRef.current = requestAnimationFrame(spinLoop);
 
-      const spinInterval = setInterval(spinGlobe, 8000);
+      map.on('mousedown', () => { userInteractingRef.current = true; });
+      map.on('touchstart', () => { userInteractingRef.current = true; });
+      map.on('mouseup', () => { userInteractingRef.current = false; });
+      map.on('touchend', () => { userInteractingRef.current = false; });
 
       mapInstanceRef.current = map;
       setMapLoaded(true);
-
-      return () => {
-        clearInterval(spinInterval);
-        spinEnabled = false;
-      };
     });
 
     return () => {
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-      }
+      if (spinRef.current) cancelAnimationFrame(spinRef.current);
+      if (mapInstanceRef.current) mapInstanceRef.current.remove();
     };
   }, []);
 
   // Generate attacks
   useEffect(() => {
+    if (!mapLoaded) return;
+
+    const generateAttack = () => {
+      const source = countries[Math.floor(Math.random() * countries.length)];
+      let target = countries[Math.floor(Math.random() * countries.length)];
+      while (target.code === source.code) target = countries[Math.floor(Math.random() * countries.length)];
+      return {
+        id: Date.now() + Math.random(),
+        timestamp: new Date(),
+        source, target,
+        attackType: attackTypes[Math.floor(Math.random() * attackTypes.length)],
+        severity: severities[Math.floor(Math.random() * severities.length)],
+        protocol: ['HTTP', 'TCP', 'UDP', 'ICMP'][Math.floor(Math.random() * 4)],
+        port: Math.floor(Math.random() * 65535),
+        sector: ['Financial', 'Healthcare', 'Government', 'Education', 'Retail'][Math.floor(Math.random() * 5)],
+        affected: Math.floor(Math.random() * 10000) + 100
+      };
+    };
+
+    // Stagger initial attacks
+    setTimeout(() => { const a = generateAttack(); setAttacks([a]); addAttackToMap(a); }, 400);
+    setTimeout(() => { const a = generateAttack(); setAttacks(p => [a, ...p]); addAttackToMap(a); }, 1200);
+
     const interval = setInterval(() => {
       const newAttack = generateAttack();
-      setAttacks(prev => [newAttack, ...prev].slice(0, 20));
-      setStats(prev => ({
-        ...prev,
-        attacksToday: prev.attacksToday + 1,
-        attacksActive: Math.floor(Math.random() * 150) + 50
-      }));
-
-      if (mapLoaded && mapInstanceRef.current) {
-        addAttackToMap(newAttack);
-      }
-    }, 2000);
+      setAttacks(prev => [newAttack, ...prev].slice(0, 25));
+      setStats(prev => ({ attacksToday: prev.attacksToday + 1, attacksActive: Math.floor(Math.random() * 150) + 50 }));
+      addAttackToMap(newAttack);
+    }, 2200);
 
     return () => clearInterval(interval);
   }, [mapLoaded]);
@@ -295,337 +314,210 @@ export default function Home() {
   return (
     <>
       <Head>
-        <title>BreachMap Live - Real-Time Cyber Threat Intelligence</title>
+        <title>BreachMap Live — Real-Time Cyber Threat Intelligence</title>
         <meta name="description" content="Real-time cyber threat visualization with 3D globe" />
         <link href='https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css' rel='stylesheet' />
+        <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
       </Head>
+      <Script src="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js" strategy="beforeInteractive" />
 
-      <Script 
-        src="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js"
-        strategy="beforeInteractive"
-      />
+      <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', background: '#04040f', fontFamily: "'Share Tech Mono', monospace" }}>
 
-      <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', background: '#0a0e1a' }}>
-        {/* Header */}
+        {/* ── HEADER ── */}
         <header style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          height: '80px',
-          background: 'linear-gradient(180deg, rgba(10, 14, 26, 0.95) 0%, rgba(10, 14, 26, 0.7) 100%)',
-          backdropFilter: 'blur(20px)',
-          borderBottom: '1px solid rgba(0, 217, 255, 0.2)',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 40px',
-          zIndex: 100
+          position: 'fixed', top: 0, left: 0, right: 0, height: '68px',
+          background: 'linear-gradient(180deg, rgba(4,4,15,0.97) 0%, rgba(4,4,15,0.75) 100%)',
+          backdropFilter: 'blur(24px)',
+          borderBottom: '1px solid rgba(0, 200, 255, 0.15)',
+          display: 'flex', alignItems: 'center', padding: '0 32px',
+          zIndex: 100, gap: '32px'
         }}>
-          <h1 style={{
-            fontFamily: 'Orbitron, sans-serif',
-            fontSize: '28px',
-            fontWeight: 900,
-            background: 'linear-gradient(135deg, #00d9ff, #a55eea)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            letterSpacing: '2px'
-          }}>
-            BREACHMAP LIVE
-          </h1>
-
-          <div style={{ display: 'flex', gap: '40px', marginLeft: 'auto', fontSize: '12px' }}>
-            <div>
-              <div style={{ color: '#6b7280', fontSize: '10px', textTransform: 'uppercase' }}>Attacks Today</div>
-              <div style={{ color: '#00d9ff', fontSize: '20px', fontFamily: 'Orbitron', fontWeight: 700 }}>
-                {stats.attacksToday.toLocaleString()}
-              </div>
-            </div>
-            <div>
-              <div style={{ color: '#6b7280', fontSize: '10px', textTransform: 'uppercase' }}>Active Now</div>
-              <div style={{ color: '#00d9ff', fontSize: '20px', fontFamily: 'Orbitron', fontWeight: 700 }}>
-                {stats.attacksActive}
-              </div>
-            </div>
+          {/* Logo */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '8px 16px',
-              background: 'rgba(255, 71, 87, 0.1)',
-              border: '1px solid #ff4757',
-              borderRadius: '20px'
+              width: '36px', height: '36px', borderRadius: '8px',
+              background: 'linear-gradient(135deg, #00c8ff, #7b2dff)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: '18px', boxShadow: '0 0 20px rgba(0,200,255,0.5)'
+            }}>⚡</div>
+            <h1 style={{
+              fontFamily: 'Orbitron', fontSize: '20px', fontWeight: 900, margin: 0,
+              background: 'linear-gradient(135deg, #00c8ff 0%, #7b2dff 100%)',
+              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+              letterSpacing: '3px'
+            }}>BREACHMAP LIVE</h1>
+          </div>
+
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: '32px', alignItems: 'center' }}>
+            <StatBadge label="Attacks Today" value={stats.attacksToday.toLocaleString()} color="#00c8ff" />
+            <StatBadge label="Active Now" value={stats.attacksActive || '—'} color="#ff2d55" />
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: '8px',
+              padding: '6px 16px', borderRadius: '20px',
+              background: 'rgba(255,45,85,0.1)', border: '1px solid rgba(255,45,85,0.4)',
+              fontSize: '11px', letterSpacing: '2px', color: '#ff2d55'
             }}>
-              <div style={{
-                width: '8px',
-                height: '8px',
-                background: '#ff4757',
-                borderRadius: '50%',
-                animation: 'pulse 2s infinite'
-              }} />
-              <span>LIVE</span>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#ff2d55', display: 'block', animation: 'blink 1s infinite' }} />
+              LIVE
             </div>
           </div>
         </header>
 
-        {/* Map Container */}
-        <div 
-          ref={mapRef} 
-          style={{
-            position: 'fixed',
-            top: '80px',
-            left: 0,
-            right: selectedAttack ? '450px' : 0,
-            bottom: 0,
-            transition: 'right 0.4s ease'
-          }}
-        />
+        {/* ── MAP ── */}
+        <div ref={mapRef} style={{
+          position: 'fixed', top: '68px', left: 0,
+          right: selectedAttack ? '460px' : 0, bottom: 0,
+          transition: 'right 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
+        }} />
 
-        {/* Attack Feed */}
+        {/* ── ATTACK FEED ── */}
         <div style={{
-          position: 'fixed',
-          bottom: '20px',
-          left: '20px',
-          width: '350px',
-          maxHeight: '300px',
-          overflowY: 'auto',
-          background: 'rgba(17, 24, 39, 0.95)',
-          backdropFilter: 'blur(20px)',
-          border: '1px solid rgba(0, 217, 255, 0.2)',
-          borderRadius: '16px',
-          padding: '20px',
-          zIndex: 50
+          position: 'fixed', bottom: '20px', left: '20px', width: '320px',
+          maxHeight: '280px', overflowY: 'auto',
+          background: 'rgba(6, 8, 20, 0.92)', backdropFilter: 'blur(20px)',
+          border: '1px solid rgba(0, 200, 255, 0.15)', borderRadius: '12px',
+          padding: '16px', zIndex: 50
         }}>
-          <h3 style={{
-            fontFamily: 'Orbitron',
-            fontSize: '14px',
-            color: '#00d9ff',
-            marginBottom: '16px',
-            textTransform: 'uppercase',
-            letterSpacing: '2px'
-          }}>
-            🔴 Live Attack Feed
-          </h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ff2d55', display: 'block', animation: 'blink 1s infinite' }} />
+            <span style={{ fontFamily: 'Orbitron', fontSize: '11px', color: '#00c8ff', letterSpacing: '2px' }}>LIVE FEED</span>
+          </div>
           {attacks.map((attack) => (
-            <div
-              key={attack.id}
-              onClick={() => setSelectedAttack(attack)}
-              style={{
-                padding: '12px',
-                background: 'rgba(0, 217, 255, 0.05)',
-                borderLeft: `3px solid ${getSeverityColor(attack.severity)}`,
-                borderRadius: '6px',
-                marginBottom: '10px',
-                fontSize: '12px',
-                cursor: 'pointer',
-                transition: 'all 0.3s ease',
-                animation: 'slideIn 0.5s ease'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'rgba(0, 217, 255, 0.15)';
-                e.currentTarget.style.transform = 'translateX(5px)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'rgba(0, 217, 255, 0.05)';
-                e.currentTarget.style.transform = 'translateX(0)';
-              }}
+            <div key={attack.id} onClick={() => setSelectedAttack(attack)} style={{
+              padding: '10px 12px',
+              background: 'rgba(0,200,255,0.03)',
+              borderLeft: `3px solid ${getSeverityColor(attack.severity)}`,
+              borderRadius: '6px', marginBottom: '8px', fontSize: '11px',
+              cursor: 'pointer', transition: 'all 0.25s ease', animation: 'slideIn 0.4s ease'
+            }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,200,255,0.1)'; e.currentTarget.style.transform = 'translateX(4px)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'rgba(0,200,255,0.03)'; e.currentTarget.style.transform = 'translateX(0)'; }}
             >
-              <div style={{ color: '#6b7280', fontSize: '10px', marginBottom: '4px' }}>
+              <div style={{ color: '#4a5568', fontSize: '10px', marginBottom: '3px', fontFamily: 'Share Tech Mono' }}>
                 {attack.timestamp.toLocaleTimeString()}
               </div>
-              <div style={{ color: '#e5e7eb' }}>
-                {attack.attackType} • {attack.source.flag} → {attack.target.flag} {attack.target.name}
+              <div style={{ color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ color: getSeverityColor(attack.severity), fontSize: '10px', fontWeight: 700, textTransform: 'uppercase' }}>
+                  {attack.severity}
+                </span>
+                <span style={{ color: '#4a5568' }}>·</span>
+                <span>{attack.attackType}</span>
+                <span style={{ color: '#4a5568' }}>·</span>
+                <span>{attack.source.flag}→{attack.target.flag}</span>
               </div>
             </div>
           ))}
         </div>
 
-        {/* Attack Details Panel */}
+        {/* ── LEGEND ── */}
+        <div style={{
+          position: 'fixed', bottom: '20px', right: selectedAttack ? '480px' : '20px',
+          background: 'rgba(6,8,20,0.92)', backdropFilter: 'blur(20px)',
+          border: '1px solid rgba(0,200,255,0.15)', borderRadius: '12px',
+          padding: '14px 18px', zIndex: 50, transition: 'right 0.4s cubic-bezier(0.16,1,0.3,1)',
+          fontSize: '11px'
+        }}>
+          <div style={{ fontFamily: 'Orbitron', fontSize: '10px', color: '#00c8ff', letterSpacing: '2px', marginBottom: '12px' }}>SEVERITY</div>
+          {[['critical', '#ff2d55'], ['high', '#ff6b35'], ['medium', '#ffd60a'], ['low', '#30d158']].map(([label, color]) => (
+            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+              <div style={{ width: '28px', height: '2px', background: color, boxShadow: `0 0 6px ${color}`, borderRadius: 2 }} />
+              <div style={{ width: 7, height: 7, borderRadius: '50%', background: color, boxShadow: `0 0 8px ${color}` }} />
+              <span style={{ color: '#718096', textTransform: 'uppercase', letterSpacing: '1px' }}>{label}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* ── DETAIL PANEL ── */}
         {selectedAttack && (
           <div style={{
-            position: 'fixed',
-            right: 0,
-            top: '80px',
-            bottom: 0,
-            width: '450px',
-            background: 'rgba(17, 24, 39, 0.98)',
-            backdropFilter: 'blur(20px)',
-            borderLeft: '1px solid rgba(0, 217, 255, 0.2)',
-            overflowY: 'auto',
-            zIndex: 90,
-            animation: 'slideInRight 0.4s ease'
+            position: 'fixed', right: 0, top: '68px', bottom: 0, width: '460px',
+            background: 'rgba(6,8,20,0.98)', backdropFilter: 'blur(24px)',
+            borderLeft: '1px solid rgba(0,200,255,0.15)',
+            overflowY: 'auto', zIndex: 90, animation: 'slideInRight 0.4s cubic-bezier(0.16,1,0.3,1)'
           }}>
-            <button
-              onClick={() => setSelectedAttack(null)}
-              style={{
-                position: 'absolute',
-                top: '30px',
-                right: '30px',
-                width: '40px',
-                height: '40px',
-                background: 'rgba(255, 71, 87, 0.2)',
-                border: '1px solid #ff4757',
-                borderRadius: '50%',
-                color: '#ff4757',
-                fontSize: '20px',
-                cursor: 'pointer',
-                transition: 'all 0.3s ease'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#ff4757';
-                e.currentTarget.style.color = 'white';
-                e.currentTarget.style.transform = 'rotate(90deg)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'rgba(255, 71, 87, 0.2)';
-                e.currentTarget.style.color = '#ff4757';
-                e.currentTarget.style.transform = 'rotate(0deg)';
-              }}
-            >
-              ✕
-            </button>
+            {/* Close */}
+            <button onClick={() => setSelectedAttack(null)} style={{
+              position: 'absolute', top: '24px', right: '24px',
+              width: '36px', height: '36px',
+              background: 'rgba(255,45,85,0.15)', border: '1px solid rgba(255,45,85,0.4)',
+              borderRadius: '50%', color: '#ff2d55', fontSize: '16px',
+              cursor: 'pointer', transition: 'all 0.2s ease', display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#ff2d55'; e.currentTarget.style.color = 'white'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,45,85,0.15)'; e.currentTarget.style.color = '#ff2d55'; }}
+            >✕</button>
 
-            <div style={{ padding: '30px', borderBottom: '1px solid rgba(0, 217, 255, 0.2)' }}>
-              <div style={{
-                fontFamily: 'Orbitron',
-                fontSize: '24px',
-                fontWeight: 900,
-                marginBottom: '12px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '12px'
-              }}>
-                {selectedAttack.attackType}
+            {/* Header */}
+            <div style={{ padding: '28px 28px 20px', borderBottom: '1px solid rgba(0,200,255,0.1)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+                <span style={{ fontFamily: 'Orbitron', fontSize: '22px', fontWeight: 900, color: '#f0f4ff' }}>
+                  {selectedAttack.attackType}
+                </span>
                 <span style={{
-                  padding: '6px 14px',
-                  borderRadius: '20px',
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  background: getSeverityColor(selectedAttack.severity),
-                  color: 'white'
+                  padding: '4px 12px', borderRadius: '20px', fontSize: '10px', fontWeight: 700,
+                  textTransform: 'uppercase', letterSpacing: '1px',
+                  background: `${getSeverityColor(selectedAttack.severity)}22`,
+                  color: getSeverityColor(selectedAttack.severity),
+                  border: `1px solid ${getSeverityColor(selectedAttack.severity)}66`,
+                  boxShadow: `0 0 12px ${getSeverityGlow(selectedAttack.severity)}`
                 }}>
                   {selectedAttack.severity}
                 </span>
               </div>
               <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '12px',
-                fontSize: '16px',
-                marginTop: '16px',
-                padding: '16px',
-                background: 'rgba(0, 217, 255, 0.05)',
-                borderRadius: '8px'
+                display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 16px',
+                background: 'rgba(0,200,255,0.04)', borderRadius: '10px',
+                border: '1px solid rgba(0,200,255,0.1)', fontSize: '14px', color: '#e2e8f0'
               }}>
-                <span style={{ fontSize: '28px' }}>{selectedAttack.source.flag}</span>
-                <span>{selectedAttack.source.name}</span>
-                <span style={{ color: '#00d9ff', fontSize: '20px' }}>→</span>
-                <span style={{ fontSize: '28px' }}>{selectedAttack.target.flag}</span>
-                <span>{selectedAttack.target.name}</span>
+                <span style={{ fontSize: '24px' }}>{selectedAttack.source.flag}</span>
+                <span style={{ color: '#718096', fontSize: '12px' }}>{selectedAttack.source.name}</span>
+                <span style={{ color: '#00c8ff', fontSize: '18px', margin: '0 6px' }}>⟶</span>
+                <span style={{ fontSize: '24px' }}>{selectedAttack.target.flag}</span>
+                <span style={{ color: '#718096', fontSize: '12px' }}>{selectedAttack.target.name}</span>
               </div>
             </div>
 
-            <div style={{ padding: '30px' }}>
-              <h4 style={{
-                fontFamily: 'Orbitron',
-                fontSize: '14px',
-                color: '#00d9ff',
-                marginBottom: '16px',
-                textTransform: 'uppercase',
-                letterSpacing: '2px'
-              }}>
-                📊 Attack Details
-              </h4>
-              <div style={{ display: 'grid', gap: '12px', marginBottom: '30px' }}>
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  padding: '12px',
-                  background: 'rgba(0, 217, 255, 0.05)',
-                  borderRadius: '6px',
-                  fontSize: '13px'
-                }}>
-                  <span style={{ color: '#9ca3af' }}>Timestamp</span>
-                  <span>{selectedAttack.timestamp.toLocaleTimeString()}</span>
-                </div>
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  padding: '12px',
-                  background: 'rgba(0, 217, 255, 0.05)',
-                  borderRadius: '6px',
-                  fontSize: '13px'
-                }}>
-                  <span style={{ color: '#9ca3af' }}>Target Sector</span>
-                  <span>{selectedAttack.sector}</span>
-                </div>
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  padding: '12px',
-                  background: 'rgba(0, 217, 255, 0.05)',
-                  borderRadius: '6px',
-                  fontSize: '13px'
-                }}>
-                  <span style={{ color: '#9ca3af' }}>Protocol</span>
-                  <span>{selectedAttack.protocol}</span>
-                </div>
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  padding: '12px',
-                  background: 'rgba(0, 217, 255, 0.05)',
-                  borderRadius: '6px',
-                  fontSize: '13px'
-                }}>
-                  <span style={{ color: '#9ca3af' }}>Affected Systems</span>
-                  <span>~{selectedAttack.affected.toLocaleString()}</span>
-                </div>
+            <div style={{ padding: '24px 28px' }}>
+              {/* Stats grid */}
+              <div style={{ fontFamily: 'Orbitron', fontSize: '11px', color: '#00c8ff', letterSpacing: '2px', marginBottom: '14px' }}>
+                ATTACK DETAILS
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '28px' }}>
+                {[
+                  ['Time', selectedAttack.timestamp.toLocaleTimeString()],
+                  ['Sector', selectedAttack.sector],
+                  ['Protocol', selectedAttack.protocol],
+                  ['Affected', `~${selectedAttack.affected.toLocaleString()}`]
+                ].map(([k, v]) => (
+                  <div key={k} style={{ padding: '12px', background: 'rgba(0,200,255,0.04)', border: '1px solid rgba(0,200,255,0.1)', borderRadius: '8px' }}>
+                    <div style={{ color: '#4a5568', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>{k}</div>
+                    <div style={{ color: '#e2e8f0', fontSize: '13px' }}>{v}</div>
+                  </div>
+                ))}
               </div>
 
-              <h4 style={{
-                fontFamily: 'Orbitron',
-                fontSize: '14px',
-                color: '#00d9ff',
-                marginBottom: '16px',
-                textTransform: 'uppercase',
-                letterSpacing: '2px'
-              }}>
-                📚 What is this attack?
-              </h4>
-              <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+              {/* Learning mode */}
+              <div style={{ fontFamily: 'Orbitron', fontSize: '11px', color: '#00c8ff', letterSpacing: '2px', marginBottom: '14px' }}>
+                WHAT IS THIS ATTACK?
+              </div>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
                 {['beginner', 'intermediate', 'expert'].map((mode) => (
-                  <button
-                    key={mode}
-                    onClick={() => setLearningMode(mode)}
-                    style={{
-                      flex: 1,
-                      padding: '12px',
-                      background: learningMode === mode 
-                        ? 'linear-gradient(135deg, #00d9ff, #a55eea)' 
-                        : 'rgba(0, 217, 255, 0.1)',
-                      border: learningMode === mode ? 'none' : '1px solid rgba(0, 217, 255, 0.3)',
-                      borderRadius: '8px',
-                      color: learningMode === mode ? 'white' : '#9ca3af',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      cursor: 'pointer',
-                      transition: 'all 0.3s ease',
-                      boxShadow: learningMode === mode ? '0 4px 15px rgba(0, 217, 255, 0.4)' : 'none'
-                    }}
-                  >
-                    {mode}
-                  </button>
+                  <button key={mode} onClick={() => setLearningMode(mode)} style={{
+                    flex: 1, padding: '10px 6px', borderRadius: '8px', fontSize: '10px',
+                    fontFamily: 'Orbitron', letterSpacing: '1px', textTransform: 'uppercase',
+                    cursor: 'pointer', transition: 'all 0.25s ease',
+                    background: learningMode === mode ? 'linear-gradient(135deg, #00c8ff22, #7b2dff22)' : 'transparent',
+                    border: learningMode === mode ? '1px solid #00c8ff' : '1px solid rgba(0,200,255,0.2)',
+                    color: learningMode === mode ? '#00c8ff' : '#4a5568',
+                    boxShadow: learningMode === mode ? '0 0 16px rgba(0,200,255,0.2)' : 'none'
+                  }}>{mode}</button>
                 ))}
               </div>
               <div style={{
-                lineHeight: 1.8,
-                fontSize: '14px',
-                padding: '20px',
-                background: 'rgba(0, 217, 255, 0.05)',
-                borderLeft: '3px solid #00d9ff',
-                borderRadius: '8px'
+                padding: '18px', lineHeight: 1.85, fontSize: '13px', color: '#a0aec0',
+                background: 'rgba(0,200,255,0.03)',
+                borderLeft: `3px solid ${getSeverityColor(selectedAttack.severity)}`,
+                borderRadius: '8px', fontFamily: 'inherit'
               }}>
                 {explanations[learningMode][selectedAttack.attackType]}
               </div>
@@ -634,20 +526,26 @@ export default function Home() {
         )}
 
         <style jsx global>{`
-          @keyframes pulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.5; transform: scale(1.3); }
-          }
-          @keyframes slideIn {
-            from { opacity: 0; transform: translateX(-20px); }
-            to { opacity: 1; transform: translateX(0); }
-          }
-          @keyframes slideInRight {
-            from { transform: translateX(100%); }
-            to { transform: translateX(0); }
-          }
+          * { box-sizing: border-box; }
+          body { margin: 0; }
+          ::-webkit-scrollbar { width: 4px; }
+          ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+          ::-webkit-scrollbar-thumb { background: rgba(0,200,255,0.3); border-radius: 2px; }
+          @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.2; } }
+          @keyframes slideIn { from { opacity:0; transform:translateX(-12px); } to { opacity:1; transform:translateX(0); } }
+          @keyframes slideInRight { from { transform:translateX(100%); } to { transform:translateX(0); } }
+          .mapboxgl-ctrl-bottom-right, .mapboxgl-ctrl-bottom-left { display: none !important; }
         `}</style>
       </div>
     </>
+  );
+}
+
+function StatBadge({ label, value, color }) {
+  return (
+    <div>
+      <div style={{ color: '#4a5568', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1.5px', marginBottom: '2px' }}>{label}</div>
+      <div style={{ color, fontFamily: 'Orbitron', fontSize: '18px', fontWeight: 700, textShadow: `0 0 20px ${color}66` }}>{value}</div>
+    </div>
   );
 }
